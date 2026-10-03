@@ -139,7 +139,7 @@ function command(task, dir, text) {
   switch (task.kind) {
     case "question": return `/answer ${task.id.split(":q:")[1] ? "q:" + task.id.split(":q:")[1] : task.n} ${t}`;
     case "decide": return dir === "down" ? `/pass ${t}` : `/pursue ${t}`;
-    case "approve": return "/approve";
+    case "approve": return task.angle ? `/approve angle ${task.angle}` : "/approve";
     case "final": return "/final";
     case "submitted": return `/submitted ${t}`;
     case "review": return "/accept";
@@ -187,7 +187,8 @@ function labelHTML(task, cls, pos) {
     <div class="cartouche">
       ${task.label ? `<div class="qlabel">${esc(task.label)}</div>` : ""}
       <p class="q${len > 220 ? " xl" : len > 130 ? " l" : ""}">${esc(task.prompt)}</p>
-      ${task.detail ? `<div class="qdetail">${esc(task.detail)}</div>` : ""}
+      ${task.detail && task.detail !== task.prompt ? `<div class="qdetail">${esc(task.detail)}</div>` : ""}
+      ${(task.options || []).length > 1 ? `<div class="qdetail">Prefer angle ${esc(task.options.map((o) => o.split(":")[0]).filter((id) => id !== task.angle).join(" or "))}? Reply on the grant's card on GitHub.</div>` : ""}
     </div>
     <div class="l-body">
       ${g.funds && g.funds !== task.detail ? `<p class="funds"><b>What it funds</b> ${esc(g.funds)}</p>` : ""}
