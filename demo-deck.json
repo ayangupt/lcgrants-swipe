@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "generated": "2026-10-02T09:00",
+  "repo": "example/sample",
+  "note": "SAMPLE DATA for the demo (?demo). Funders and questions are made up; nothing here is real.",
+  "grants": [
+    {"id": "sample-arts", "issue": 1, "title": "Sample City Arts Office — Neighborhood Arts", "funder": "Sample City Arts", "deadline": "2026-10-05", "days": 3, "band": "this week", "rank": 1, "stage": "9. Panel review", "status": "needs-you", "why": ["Draft ready — your feedback"], "funds": "Sample: free public arts events in neighborhood parks.", "award": "Sample: up to $8,000", "url": "https://example.org", "open": 3, "answered": 1, "local": true},
+    {"id": "sample-capital", "issue": 2, "title": "Sample State Commerce — Capacity Building", "funder": "Sample Commerce", "deadline": "2026-10-30", "days": 28, "band": "this month", "rank": 2, "stage": "9. Panel review", "status": "blocked", "why": ["Blocked on something we owe"], "funds": "Sample: design and permitting help for a community building.", "award": "Sample: up to $50,000", "url": "https://example.org", "open": 2, "answered": 0, "local": true},
+    {"id": "sample-fund", "issue": 3, "title": "Sample Family Foundation", "funder": "Sample Family Fdn", "deadline": "2026-10-15", "days": 13, "band": "next 2 weeks", "rank": 3, "stage": "1. Capture RFP", "status": "agent", "why": ["Due within 2 weeks, no draft yet: pursue or pass?"], "funds": "Sample: performing arts programs.", "award": "Sample: $2,500–$15,000", "url": "https://example.org", "open": 0, "answered": 0, "local": true}
+  ],
+  "tasks": [
+    {"id": "sample-arts:q:aa11", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "Which park do we want for the free outdoor music day?", "detail": "Project location", "xp": 10, "n": 1, "label": "Park and dates"},
+    {"id": "sample-arts:q:bb22", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "How many musicians will we pay, and at what fee each?", "detail": "Budget", "xp": 10, "n": 2, "label": "Artist fees"},
+    {"id": "sample-fund:decide", "grant": "sample-fund", "issue": 3, "kind": "decide", "prompt": "Pursue this grant, or pass?", "detail": "Sample: performing arts programs.", "xp": 20},
+    {"id": "sample-capital:bl:1", "grant": "sample-capital", "issue": 2, "kind": "blocked", "prompt": "Blocked: board vote on the building plan", "detail": "Tell me what changed, or mark it unblocked.", "xp": 10},
+    {"id": "sample-arts:q:cc33", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "Share one sentence from a participant about the Saturday gathering.", "detail": "Community benefit", "xp": 10, "n": 3, "label": "Participant quote"},
+    {"id": "sample-capital:q:dd44", "grant": "sample-capital", "issue": 2, "kind": "question", "prompt": "Do we have a Statewide Vendor number yet?", "detail": "Applicant information", "xp": 10, "n": 1, "label": "Registrations"}
+  ]
+}
