@@ -36,11 +36,15 @@ async function gh(path, opts = {}) {
 const repo = () => LS.get("repo", "");
 { const r = new URLSearchParams(location.search).get("repo"); if (r && /^[\w.-]+\/[\w.-]+$/.test(r)) LS.set("repo", r); }
 
-function decodeDeck(body) {
-  const m = /<!-- lcg:deck ([A-Za-z0-9+/=]+) -->/.exec(body || "");
+async function decodeDeck(body) {
+  const z = /<!-- lcg:deckz ([A-Za-z0-9+/=]+) -->/.exec(body || "");
+  const m = z || /<!-- lcg:deck ([A-Za-z0-9+/=]+) -->/.exec(body || "");
   if (!m) return null;
   const bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
+  if (!z) return JSON.parse(new TextDecoder().decode(bytes));
+  if (!("DecompressionStream" in window)) throw new Error("This browser can't open the deck. Update iOS or Chrome, then try again.");
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
 }
 
 async function fetchDeck() {
@@ -53,7 +57,7 @@ async function fetchDeck() {
     }
     const issues = await gh(`/repos/${repo()}/issues?labels=grant-inbox&state=open&per_page=1`);
     if (!issues.length) throw new Error("No Grant inbox issue yet. The PC sync creates it on its next run.");
-    const deck = decodeDeck(issues[0].body);
+    const deck = await decodeDeck(issues[0].body);
     if (!deck) throw new Error("The inbox has no task deck yet. It appears after the next sync (every 10 min).");
     state.deck = deck; state.inbox = issues[0].number; state.lastFetch = Date.now();
     LS.set("deck", deck); LS.set("inbox", state.inbox);
@@ -72,21 +76,30 @@ function pruneSent() {
   const dayAgo = Date.now() - 36 * 3600e3;
   for (const [id, ts] of Object.entries(sent)) if (ids.has(id) && ts > dayAgo) keep[id] = ts;
   LS.set("sent", keep);
+  const asked = LS.get("explainAsked", {}), stillAsked = {};
+  for (const [id, ts] of Object.entries(asked)) {
+    const t = (state.deck?.tasks || []).find((x) => x.id === id);
+    if (t && !(t.ai && t.ai.explain) && ts > Date.now() - 48 * 3600e3) stillAsked[id] = ts;
+  }
+  LS.set("explainAsked", stillAsked);
 }
 const isSent = (t) => !!LS.get("sent", {})[t.id];
 
-async function send(task, command) {
-  const sent = LS.get("sent", {}); sent[task.id] = Date.now(); LS.set("sent", sent);
-  bumpStats(task);
+async function post(issue, body, id) {
   if (state.demo) return true;                       // demo: nothing leaves the phone
   try {
     if (!navigator.onLine) throw new Error("offline");
-    await gh(`/repos/${repo()}/issues/${task.issue}/comments`, { method: "POST", body: JSON.stringify({ body: command }) });
+    await gh(`/repos/${repo()}/issues/${issue}/comments`, { method: "POST", body: JSON.stringify({ body }) });
     return true;
   } catch {
-    const q = LS.get("queue", []); q.push({ issue: task.issue, body: command, id: task.id, at: Date.now() }); LS.set("queue", q);
+    const q = LS.get("queue", []); q.push({ issue, body, id, at: Date.now() }); LS.set("queue", q);
     return false;
   }
+}
+async function send(task, command) {
+  const sent = LS.get("sent", {}); sent[task.id] = Date.now(); LS.set("sent", sent);
+  bumpStats(task);
+  return post(task.issue, command, task.id);
 }
 async function flushQueue() {
   const q = LS.get("queue", []);
@@ -180,18 +193,22 @@ function labelHTML(task, cls, pos) {
     : `<b>${d < 0 ? "LATE" : d === 0 ? "TODAY" : d + "d"}</b><small>${esc(fmtDate(g.deadline))}</small>`;
   if (pos === 0 && state.flipped) return backHTML(task, g, ink, cls);
   const mine = (state.deck?.tasks || []).filter((t) => t.grant === task.grant), sent = LS.get("sent", {});
-  const struck = mine.filter((t) => sent[t.id]).length, len = (task.prompt || "").length;
+  const ask = (task.ai && task.ai.ask) || task.prompt;
+  const struck = mine.filter((t) => sent[t.id]).length, len = (ask || "").length;
+  const snip = snippet(task);
   return `<article class="label c-${ink} ${cls}" data-id="${esc(task.id)}" ${pos === 0 ? 'tabindex="0" aria-roledescription="swipe card"' : 'aria-hidden="true"'}>
-    <div class="l-head"><h2 class="funder">${esc(g.funder || g.title || "Grant")}</h2><div class="stamp ${hot ? "hot" : ""}" aria-label="Due ${esc(g.deadline || "no date")}">${stamp}</div></div>
+    <div class="l-head"><h2 class="funder${longWord(g.funder || g.title) ? " long" : ""}">${esc(g.funder || g.title || "Grant")}</h2><div class="stamp ${hot ? "hot" : ""}" aria-label="Due ${esc(g.deadline || "no date")}">${stamp}</div></div>
     <div class="l-meta"><span>${esc(k.tag)}</span></div>
     <div class="cartouche">
       ${task.label ? `<div class="qlabel">${esc(task.label)}</div>` : ""}
-      <p class="q${len > 220 ? " xl" : len > 130 ? " l" : ""}">${esc(task.prompt)}</p>
-      ${task.detail && task.detail !== task.prompt ? `<div class="qdetail">${esc(task.detail)}</div>` : ""}
+      <p class="q${len > 220 ? " xl" : len > 130 ? " l" : ""}">${esc(ask)}</p>
+      ${snip ? `<blockquote class="where"><span class="wl">${esc(snip.label)}</span>${snip.html}</blockquote>` : ""}
+      ${task.detail && task.detail !== task.prompt ? `<div class="qdetail">${esc(task.detail)}${task.ai && task.ai.ask ? " · reworded by Copilot" : ""}</div>` : ""}
       ${(task.options || []).length > 1 ? `<div class="qdetail">Prefer angle ${esc(task.options.map((o) => o.split(":")[0]).filter((id) => id !== task.angle).join(" or "))}? Reply on the grant's card on GitHub.</div>` : ""}
+      ${task.ctx ? `<button class="more" data-act="context">What is this for? ›</button>` : ""}
     </div>
     <div class="l-body">
-      ${g.funds && g.funds !== task.detail ? `<p class="funds"><b>What it funds</b> ${esc(g.funds)}</p>` : ""}
+      ${g.funds && g.funds !== task.detail && !task.ctx ? `<p class="funds"><b>What it funds</b> ${esc(g.funds)}</p>` : ""}
       ${mine.length > 1 ? `<div class="boxprog" aria-label="${struck} of ${mine.length} matches struck for this grant">${mine.map((t) => `<i class="${sent[t.id] ? "done" : ""}"></i>`).join("")}<span>${struck} of ${mine.length} struck</span></div>` : ""}
       ${LOTUS}
     </div>
@@ -201,10 +218,29 @@ function labelHTML(task, cls, pos) {
   </article>`;
 }
 const LOTUS = `<svg class="emblem" viewBox="0 0 120 76" aria-hidden="true"><path d="M60 6c11 13 15 28 0 54C45 34 49 19 60 6z"/><path d="M58 60C50 41 37 29 18 25c2 18 15 32 40 35z"/><path d="M62 60c8-19 21-31 40-35-2 18-15 32-40 35z"/><path d="M57 63C38 60 20 52 4 41c8 16 27 26 53 22z"/><path d="M63 63c19-3 37-11 53-22-8 16-27 26-53 22z"/><rect x="22" y="68" width="76" height="4" rx="2"/></svg>`;
+
+/* ---------- question context (built by tools/questions.py) ---------- */
+function rich(s, hi) {
+  let h = esc(s).replace(/▢/g, '<mark class="blank">your answer</mark>');
+  for (const n of hi || []) h = h.split(esc(n)).join(`<mark class="num">${esc(n)}</mark>`);
+  return h;
+}
+function snippet(task) {
+  const c = task.ctx;
+  if (!c) return null;
+  if (c.where) return { label: "Goes into", html: rich(c.where) };
+  if ((c.used || []).length) return { label: "Used in the application", html: rich(c.used[0], c.hi) };
+  if ((c.list || []).length) return { label: "About this list", html: esc(c.list.slice(0, 2).join(" · ")) };
+  if ((c.above || []).length) return { label: "Just above it in the draft", html: esc(c.above.slice(-2).join(" · ")) };
+  if (c.note) return { label: "Note in the draft", html: rich(c.note, c.hi) };
+  return null;
+}
+const STATUS = { conflict: "Conflict", confirm: "Unconfirmed", ok: "On file" };
+const longWord = (s) => Math.max(0, ...String(s || "").split(/\s+/).map((w) => w.length)) > 11;
 function backHTML(task, g, ink, cls) {
   const sent = LS.get("sent", {}), left = (state.deck?.tasks || []).filter((t) => t.grant === task.grant && !sent[t.id]).length;
   return `<article class="label back c-${ink} ${cls}" data-id="${esc(task.id)}" tabindex="0">
-    <div class="l-head"><h2 class="funder">${esc(g.funder || "Grant")}</h2></div>
+    <div class="l-head"><h2 class="funder${longWord(g.funder) ? " long" : ""}">${esc(g.funder || "Grant")}</h2></div>
     <div class="l-meta"><span>${esc(g.stage || "")}</span></div>
     <div class="cartouche">
       ${g.title && g.title !== g.funder ? `<h3>Grant</h3><p>${esc(g.title)}</p>` : ""}
@@ -312,6 +348,7 @@ function onAct(e, b) {
   else if (act === "refresh") fetchDeck();
   else if (act === "settings") openSettings();
   else if (act === "flip") { e.stopPropagation(); state.flipped = !state.flipped; render(); }
+  else if (top && act === "context") { e.stopPropagation(); openContext(top); }
   else if (top && act === "later") flyOut(top, "left");
   else if (top && act === "right") act3(top, "right");
   else if (top && act === "voice") act3(top, "right", true);
@@ -407,25 +444,73 @@ function sparks(el) {
 
 /* ---------- sheet + voice ---------- */
 let rec = null;
-function openSheet(task, dir, label, needText, voice) {
-  const g = grantOf(task), sheet = $("#sheet");
+function openContext(task) {
+  const g = grantOf(task), c = task.ctx || {}, ai = task.ai || {}, sheet = $("#sheet");
+  const asked = LS.get("explainAsked", {})[task.id];
   const scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
-  sheet.innerHTML = `<h2>${esc(label)}</h2>
-    <p class="ctx">${esc(g.funder || "")}${task.label ? " · " + esc(task.label) : ""}<br>${esc(task.prompt)}</p>
+  const facts = (c.facts || []).map((f) => `<li><span class="st st-${esc(f.s)}">${esc(STATUS[f.s] || f.s)}</span>${esc(f.t)}<small>${esc(f.src)}</small></li>`).join("");
+  const list = (title, xs) => (xs || []).length ? `<h3>${title}</h3><ul class="lst">${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  sheet.innerHTML = `<div class="sheet-scroll">
+    <h2>What this is for</h2>
+    <p class="ctx">${esc(g.funder || "")}${c.section ? " · " + esc(c.section) : ""}</p>
+    <p class="q-in">${esc(ai.ask || task.prompt)}</p>
+    ${ai.ask && ai.ask !== task.prompt ? `<p class="orig">In the draft: “${esc(task.label ? task.label + ": " : "")}${esc(task.prompt)}”</p>` : ""}
+    ${ai.why ? `<div class="ai"><b>Copilot's read</b><p>${esc(ai.why)}</p></div>` : ""}
+    ${ai.explain ? `<div class="ai"><b>Copilot explains</b><p>${esc(ai.explain)}</p></div>` : ""}
+    ${c.where ? `<h3>Your answer goes into</h3><blockquote class="where">${rich(c.where)}</blockquote>` : ""}
+    ${(c.used || []).length ? `<h3>Where the application uses it</h3>${c.used.map((u) => `<blockquote class="where">${rich(u, c.hi)}</blockquote>`).join("")}` : ""}
+    ${list("The list it introduces", c.list)}${list("Just above it in the draft", c.above)}
+    ${c.note ? `<h3>${c.zone === "field" ? "Notes on this field" : "Copilot's note in the draft"}</h3><p class="note">${rich(c.note, c.hi)}</p>` : ""}
+    ${facts ? `<h3>What our files say</h3><ul class="facts">${facts}</ul>` : ""}
+    ${c.funder ? `<h3>The funder's question</h3><blockquote class="fq">${esc(c.funder)}</blockquote>` : ""}
+    ${(c.also || []).length ? `<h3>Also used in</h3><p class="note">${esc(c.also.join(" · "))}</p>` : ""}
+    ${g.draft ? `<p class="note"><a href="${esc(g.draft)}${c.line ? "#L" + c.line : ""}" target="_blank" rel="noopener">Open this spot in the draft ↗</a></p>` : ""}
+    ${asked && !ai.explain ? `<p class="ctx small">You asked Copilot to explain this. It shows up here in about 10 minutes.</p>` : ""}
+  </div>
+  <div class="row"><button class="btn cancel" data-s="explain" ${asked || !task.id.includes(":q:") ? "disabled" : ""}>${asked ? "Asked ✓" : "Explain more"}</button><button class="btn strike" data-s="answer">Answer ${icon("strike")}</button></div>`;
+  sheet.hidden = false;
+  const close = () => { sheet.hidden = true; scrim.remove(); };
+  scrim.onclick = close;
+  sheet.querySelector("[data-s=answer]").onclick = () => { close(); act3(task, "right"); };
+  const ex = sheet.querySelector("[data-s=explain]");
+  ex.onclick = async () => {
+    const m = LS.get("explainAsked", {}); m[task.id] = Date.now(); LS.set("explainAsked", m);
+    ex.disabled = true; ex.textContent = "Asked ✓";
+    const ok = await post(task.issue, `/explain q:${task.id.split(":q:")[1]}`, task.id + ":explain");
+    toast(ok ? "Asked Copilot. The explanation shows up on this card in about 10 minutes." : "Saved. It asks Copilot when you have signal.");
+  };
+}
+function openSheet(task, dir, label, needText, voice) {
+  const g = grantOf(task), sheet = $("#sheet"), ai = task.ai || {}, snip = task.kind === "question" ? snippet(task) : null;
+  const scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
+  const chips = dir === "right" ? (ai.options || []).map((o) => `<button class="chip" data-opt="${esc(o)}">${esc(o)}</button>`).join("") : "";
+  sheet.innerHTML = `<div class="sheet-scroll"><h2>${esc(label)}</h2>
+    <p class="ctx">${esc(g.funder || "")}${task.label ? " · " + esc(task.label) : ""}</p>
+    <p class="q-in">${esc(ai.ask || task.prompt)}</p>
+    ${snip ? `<blockquote class="where small"><span class="wl">${esc(snip.label)}</span>${snip.html}</blockquote>` : ""}
+    ${chips ? `<div class="chips" role="group" aria-label="Suggested answers">${chips}</div>` : ""}
     <textarea id="ans" placeholder="${needText ? "Say it or type it…" : "Add a note (optional)"}" aria-label="Your answer"></textarea>
-    <div class="row"><button class="btn mic" data-s="mic" aria-label="Dictate">${icon("mic")}</button><span class="listening" id="lis" aria-live="polite">${window.SpeechRecognition || window.webkitSpeechRecognition ? "Tap to talk" : "Use the mic on your keyboard"}</span></div>
+    <div class="row"><button class="btn mic" data-s="mic" aria-label="Dictate">${icon("mic")}</button><span class="listening" id="lis" aria-live="polite">${window.SpeechRecognition || window.webkitSpeechRecognition ? "Tap to talk" : "Use the mic on your keyboard"}</span>${task.ctx ? `<button class="linkish" data-s="ctx">What is this for?</button>` : ""}</div></div>
     <div class="row"><button class="btn cancel" data-s="cancel">Cancel</button><button class="btn strike" data-s="go">${esc(label)} ${icon("strike")}</button></div>`;
   sheet.hidden = false;
   const ta = $("#ans"), close = () => { stopRec(); sheet.hidden = true; scrim.remove(); };
   scrim.onclick = close;
   sheet.querySelector("[data-s=cancel]").onclick = close;
   sheet.querySelector("[data-s=mic]").onclick = (e) => toggleRec(ta, e.currentTarget);
+  const cx = sheet.querySelector("[data-s=ctx]");
+  if (cx) cx.onclick = () => { close(); openContext(task); };
+  sheet.querySelectorAll("[data-opt]").forEach((b) => (b.onclick = () => {
+    const o = b.dataset.opt, at = o.indexOf("___");
+    ta.value = o.replace("___", "");
+    ta.focus();
+    if (at >= 0) ta.setSelectionRange(at, at);
+  }));
   sheet.querySelector("[data-s=go]").onclick = () => {
     const v = ta.value.trim();
     if (needText && !v) { ta.focus(); $("#lis").textContent = "Say or type your answer first"; return; }
     close(); strike(task, dir, v);
   };
-  if (voice) toggleRec(ta, sheet.querySelector("[data-s=mic]")); else setTimeout(() => ta.focus(), 50);
+  if (voice) toggleRec(ta, sheet.querySelector("[data-s=mic]")); else if (!chips) setTimeout(() => ta.focus(), 50);
 }
 function toggleRec(ta, btn) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;

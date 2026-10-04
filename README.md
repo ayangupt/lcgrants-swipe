@@ -12,7 +12,12 @@ decision, a blocked item, a follow-up) is a match:
 | Swipe down / **Pass** | On a pursue-or-pass card: pass on the grant. |
 | Swipe up | On a follow-up card: they replied. |
 | **About this grant** | Flip the label: what the grant funds, the award, links. |
+| **What is this for?** | Where the answer goes in the application, the draft's note, what the organization's files say about any number involved, and the funder's question. **Explain more** asks Copilot for a longer explanation. |
 | Boxes (top right) | Every grant with matches left, nearest deadline first. |
+
+Questions can be reworded by Copilot, with suggested answers you can tap to fill in (you can always edit
+before sending). Copilot's text is labeled as Copilot's, and it can't add numbers that aren't already in
+the draft or the organization's fact list.
 
 Light at least one match a day to keep the flame going; the strip at the top counts toward a daily goal
 you set in Settings.

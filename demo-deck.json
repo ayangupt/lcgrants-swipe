@@ -9,12 +9,24 @@
     {"id": "sample-fund", "issue": 3, "title": "Sample Family Foundation", "funder": "Sample Family Fdn", "deadline": "2026-10-15", "days": 13, "band": "next 2 weeks", "rank": 3, "stage": "1. Capture RFP", "status": "agent", "why": ["Due within 2 weeks, no draft yet: pursue or pass?"], "funds": "Sample: performing arts programs.", "award": "Sample: $2,500–$15,000", "url": "https://example.org", "open": 0, "answered": 0, "local": true}
   ],
   "tasks": [
-    {"id": "sample-arts:q:aa11", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "Which park do we want for the free outdoor music day?", "detail": "Project location", "xp": 10, "n": 1, "label": "Park and dates"},
-    {"id": "sample-arts:q:bb22", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "How many musicians will we pay, and at what fee each?", "detail": "Budget", "xp": 10, "n": 2, "label": "Artist fees"},
+    {"id": "sample-arts:q:bb22", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "confirm 1,200+ is current", "detail": "Q1. Who we are", "xp": 10, "n": 2, "label": "",
+     "ctx": {"section": "Q1. Who we are", "funder": "Sample: Describe your organization and how long you have served your community.", "zone": "notes",
+             "used": ["Sample: Today we hold more than 90 public events a year, and more than 1,200 people have come to our programs since 2022."], "hi": ["1,200"],
+             "note": "Sample note: 90+ events and 1,200+ people come from the sample launch application. about.md gives \"900+\" for Saturday gatherings only, so the two figures measure different things.",
+             "facts": [{"t": "Sample: 'welcomed over 1,200 people' — about.md says 900+", "s": "conflict", "src": "sample-launch/application.md"},
+                       {"t": "Sample: 900+ total Saturday gathering attendees since 2022", "s": "ok", "src": "about.md"}]},
+     "ai": {"ask": "Is 1,200+ still the right total for everyone who has come to any of our programs since 2022?", "why": "Sample: Q1 says more than 1,200 people have come to our programs, but about.md only has 900+, which counts Saturday gatherings alone. The panel could notice two different totals.",
+            "options": ["Yes, 1,200+ is current", "Use 900+ (Saturday gatherings only)", "New total: ___ as of ___"], "kind": "choice"}},
+    {"id": "sample-arts:q:aa11", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "park name", "detail": "Project location", "xp": 10, "n": 1, "label": "",
+     "ctx": {"section": "Project location", "funder": "Sample: Where will your event take place? Choose an eligible park.", "zone": "answer",
+             "where": "Sample: Our free outdoor music day will take place at ▢ on a Saturday in June."},
+     "ai": {"ask": "Which park should the application name for the free outdoor music day?", "why": "Sample: the funder only pays for events in eligible parks, and the location sentence needs a park name.",
+            "options": ["Sample Park A", "Sample Park B", "Another park: ___"], "kind": "choice"}},
     {"id": "sample-fund:decide", "grant": "sample-fund", "issue": 3, "kind": "decide", "prompt": "Pursue this grant, or pass?", "detail": "Sample: performing arts programs.", "xp": 20},
     {"id": "sample-capital:gate1", "grant": "sample-capital", "issue": 2, "kind": "approve", "prompt": "Approve angle F and start drafting?", "detail": "Facility — a permanent home", "xp": 20, "angle": "F", "options": ["A: Arts — use what we already do", "B: Arts — stronger fit with new commitments", "F: Facility — a permanent home"]},
     {"id": "sample-capital:bl:1", "grant": "sample-capital", "issue": 2, "kind": "blocked", "prompt": "Blocked: board vote on the building plan", "detail": "Tell me what changed, or mark it unblocked.", "xp": 10},
     {"id": "sample-arts:q:cc33", "grant": "sample-arts", "issue": 1, "kind": "question", "prompt": "Share one sentence from a participant about the Saturday gathering.", "detail": "Community benefit", "xp": 10, "n": 3, "label": "Participant quote"},
-    {"id": "sample-capital:q:dd44", "grant": "sample-capital", "issue": 2, "kind": "question", "prompt": "Do we have a Statewide Vendor number yet?", "detail": "Applicant information", "xp": 10, "n": 1, "label": "Registrations"}
+    {"id": "sample-capital:q:dd44", "grant": "sample-capital", "issue": 2, "kind": "question", "prompt": "Statewide Vendor number", "detail": "Applicant information", "xp": 10, "n": 1, "label": "",
+     "ctx": {"section": "Applicant information", "zone": "field", "note": "Sample: Status: needed for any state contract; register with the state first."}}
   ]
 }
