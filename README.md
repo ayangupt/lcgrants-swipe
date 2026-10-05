@@ -12,12 +12,16 @@ decision, a blocked item, a follow-up) is a match:
 | Swipe down / **Pass** | On a pursue-or-pass card: pass on the grant. |
 | Swipe up | On a follow-up card: they replied. |
 | **About this grant** | Flip the label: what the grant funds, the award, links. |
-| **What is this for?** | Where the answer goes in the application, the draft's note, what the organization's files say about any number involved, and the funder's question. **Explain more** asks Copilot for a longer explanation. |
+| **What is this for?** | Where the answer goes in the application, the draft's note, what the organization's files say about any number involved, related passages from its other files, and the funder's question. **Explain more** asks Copilot for a longer explanation. |
+| **Use this** | On a "Found in our files" card: send the value the organization's own records already give, with its source. Prefer something else? **What is this for? → Answer differently**. |
+| Pencil (top right) | A note for Copilot that doesn't answer any card: a changed number, a new partner, a decision. Pick one grant or all grants. |
 | Boxes (top right) | Every grant with matches left, nearest deadline first. |
 
 Questions can be reworded by Copilot, with suggested answers you can tap to fill in (you can always edit
 before sending). Copilot's text is labeled as Copilot's, and it can't add numbers that aren't already in
-the draft or the organization's fact list.
+the draft or the organization's fact list. Before a question reaches you, the sync looks in the
+organization's own files: values many files agree on are filled in without asking, and an answer Copilot
+"found" must quote one of those files word for word.
 
 Light at least one match a day to keep the flame going; the strip at the top counts toward a daily goal
 you set in Settings.

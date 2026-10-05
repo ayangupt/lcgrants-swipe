@@ -147,10 +147,17 @@ const KIND = {
   blocked: { tag: "Blocked", right: "Unblock", sheet: "text" },
   followup: { tag: "Follow-up due", right: "Followed up", up: "They replied", sheet: "note" },
 };
+function kindOf(task) {
+  const k = KIND[task.kind] || KIND.question;
+  return task.kind === "question" && task.ai && task.ai.found ? { ...k, tag: "Found in our files", right: "Use this", sheet: "confirm" } : k;
+}
 function command(task, dir, text) {
   const t = (text || "").replace(/\s*\n+\s*/g, " ").trim();   // the sync reads one command per line
   switch (task.kind) {
-    case "question": return `/answer ${task.id.split(":q:")[1] ? "q:" + task.id.split(":q:")[1] : task.n} ${t}`;
+    case "question": {
+      const f = task.ai && task.ai.found, id = task.id.split(":q:")[1] ? "q:" + task.id.split(":q:")[1] : task.n;
+      return `/answer ${id} ${t || (f ? `${f.answer} (from our records: ${f.file})` : "")}`;
+    }
     case "decide": return dir === "down" ? `/pass ${t}` : `/pursue ${t}`;
     case "approve": return task.angle ? `/approve angle ${task.angle}` : "/approve";
     case "final": return "/final";
@@ -181,28 +188,31 @@ function stripView() {
   return `<header class="strip">
     <span class="flame ${s.lit ? "" : "out"}" title="Days in a row with at least one match struck">${flame}${s.n ? `${s.n} day${s.n === 1 ? "" : "s"}` : "Start a streak"}</span>
     <span class="today" aria-label="${done} of ${goal} matches struck today">${sticks}<span class="today-label">${done}/${goal} today</span></span>
+    <button class="iconbtn" data-act="note" aria-label="Note for Copilot">${icon("note")}</button>
     <button class="iconbtn" data-act="shelf" aria-label="${state.view === "shelf" ? "Back to the deck" : "All boxes"}">${state.view === "shelf" ? icon("deck") : icon("shelf")}</button>
   </header>`;
 }
 
 function labelHTML(task, cls, pos) {
-  const g = grantOf(task), k = KIND[task.kind] || KIND.question, ink = inkOf(g);
+  const g = grantOf(task), k = kindOf(task), ink = inkOf(g);
   const d = g.days, hot = d != null && d <= 3;
   const stamp = g.deadline === "rolling" ? `<b>ROLL</b><small>rolling</small>`
     : d == null ? `<b>—</b><small>no date</small>`
     : `<b>${d < 0 ? "LATE" : d === 0 ? "TODAY" : d + "d"}</b><small>${esc(fmtDate(g.deadline))}</small>`;
   if (pos === 0 && state.flipped) return backHTML(task, g, ink, cls);
   const mine = (state.deck?.tasks || []).filter((t) => t.grant === task.grant), sent = LS.get("sent", {});
-  const ask = (task.ai && task.ai.ask) || task.prompt;
+  const ask = (task.ai && task.ai.ask) || task.prompt, found = task.ai && task.ai.found;
   const struck = mine.filter((t) => sent[t.id]).length, len = (ask || "").length;
-  const snip = snippet(task);
+  const snip = found ? null : snippet(task);
   return `<article class="label c-${ink} ${cls}" data-id="${esc(task.id)}" ${pos === 0 ? 'tabindex="0" aria-roledescription="swipe card"' : 'aria-hidden="true"'}>
     <div class="l-head"><h2 class="funder${longWord(g.funder || g.title) ? " long" : ""}">${esc(g.funder || g.title || "Grant")}</h2><div class="stamp ${hot ? "hot" : ""}" aria-label="Due ${esc(g.deadline || "no date")}">${stamp}</div></div>
     <div class="l-meta"><span>${esc(k.tag)}</span></div>
     <div class="cartouche">
       ${task.label ? `<div class="qlabel">${esc(task.label)}</div>` : ""}
       <p class="q${len > 220 ? " xl" : len > 130 ? " l" : ""}">${esc(ask)}</p>
+      ${found ? foundHTML(found) : ""}
       ${snip ? `<blockquote class="where"><span class="wl">${esc(snip.label)}</span>${snip.html}</blockquote>` : ""}
+      ${task.ctx && task.ctx.deferred && !found ? `<div class="qdetail warn">You said to pull this from past grants, but it isn't in our files yet.</div>` : ""}
       ${task.detail && task.detail !== task.prompt ? `<div class="qdetail">${esc(task.detail)}${task.ai && task.ai.ask ? " · reworded by Copilot" : ""}</div>` : ""}
       ${(task.options || []).length > 1 ? `<div class="qdetail">Prefer angle ${esc(task.options.map((o) => o.split(":")[0]).filter((id) => id !== task.angle).join(" or "))}? Reply on the grant's card on GitHub.</div>` : ""}
       ${task.ctx ? `<button class="more" data-act="context">What is this for? ›</button>` : ""}
@@ -237,6 +247,10 @@ function snippet(task) {
 }
 const STATUS = { conflict: "Conflict", confirm: "Unconfirmed", ok: "On file" };
 const longWord = (s) => Math.max(0, ...String(s || "").split(/\s+/).map((w) => w.length)) > 11;
+function foundHTML(f) {
+  return `<div class="found"><span class="wl">Found in our files</span><b>${esc(f.answer)}</b>
+    <small>“${esc(f.quote)}” · ${esc(f.file)}${f.date ? ", " + esc(f.date) : ""}</small></div>`;
+}
 function backHTML(task, g, ink, cls) {
   const sent = LS.get("sent", {}), left = (state.deck?.tasks || []).filter((t) => t.grant === task.grant && !sent[t.id]).length;
   return `<article class="label back c-${ink} ${cls}" data-id="${esc(task.id)}" tabindex="0">
@@ -247,6 +261,9 @@ function backHTML(task, g, ink, cls) {
       ${g.funds ? `<h3>What it funds</h3><p>${esc(g.funds)}</p>` : ""}
       ${g.award ? `<h3>Award</h3><p>${esc(g.award)}</p>` : ""}
       ${(g.why || []).length ? `<h3>Why it needs you</h3><p>${esc(g.why.join("; "))}</p>` : ""}
+      ${(g.notes || []).length ? `<h3>Your notes for Copilot</h3>${g.notes.map((n) => `<p class="note-line">${esc(n.text)} <small>${esc(n.date)}${n.all ? " · all grants" : ""}</small></p>`).join("")}` : ""}
+      ${(g.filled || []).length ? `<h3>Filled from our records</h3>${g.filled.map((f) => `<p class="note-line">${esc(f.q)}: <b>${esc(f.text.split(" (")[0])}</b></p>`).join("")}` : ""}
+      <button class="more" data-act="note" data-grant="${esc(g.id)}">Add a note for Copilot ›</button>
       ${g.local === false ? `<p>This draft lives in another Copilot session. Your answers are saved next to it.</p>` : ""}
       <p>${g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener noreferrer">Funder page ↗</a> · ` : ""}${g.issue ? `<a href="https://github.com/${esc(repo())}/issues/${g.issue}" target="_blank" rel="noopener">Card on GitHub ↗</a>` : ""}</p>
     </div>
@@ -265,7 +282,7 @@ function deckView() {
         "Nothing needs you right now. New matches arrive after the next sync.", false)}</section>`;
   }
   const top = tasks.slice(0, 3);
-  const k = KIND[tasks[0].kind] || KIND.question;
+  const k = kindOf(tasks[0]);
   return `<section class="stage"><div class="stack">
       ${top.map((t, i) => labelHTML(t, i === 0 ? "" : i === 1 ? "behind" : "behind2", i)).reverse().join("")}
     </div></section>
@@ -348,6 +365,7 @@ function onAct(e, b) {
   else if (act === "refresh") fetchDeck();
   else if (act === "settings") openSettings();
   else if (act === "flip") { e.stopPropagation(); state.flipped = !state.flipped; render(); }
+  else if (act === "note") { e.stopPropagation(); openNote(b.dataset.grant || state.focus || (top && top.grant) || null); }
   else if (top && act === "context") { e.stopPropagation(); openContext(top); }
   else if (top && act === "later") flyOut(top, "left");
   else if (top && act === "right") act3(top, "right");
@@ -357,7 +375,7 @@ function onAct(e, b) {
 }
 
 function act3(task, dir, voice = false) {
-  const k = KIND[task.kind] || KIND.question;
+  const k = kindOf(task);
   const label = dir === "up" ? k.up : dir === "down" ? k.down : k.right;
   const mode = dir === "down" ? "note" : dir === "up" ? "note" : k.sheet;
   if (mode === "confirm" && !voice) { strike(task, dir, ""); return; }
@@ -367,7 +385,7 @@ function act3(task, dir, voice = false) {
 function bindSwipe() {
   const el = $(".stack .label:last-child");
   if (!el) return;
-  const task = visibleTasks()[0], k = KIND[task.kind] || KIND.question;
+  const task = visibleTasks()[0], k = kindOf(task);
   let x0 = 0, y0 = 0, dx = 0, dy = 0, dragging = false;
   const hint = (cls, on) => { const h = el.querySelector(".hint." + cls); if (h) h.style.opacity = on; };
   el.addEventListener("pointerdown", (e) => {
@@ -455,6 +473,8 @@ function openContext(task) {
     <p class="ctx">${esc(g.funder || "")}${c.section ? " · " + esc(c.section) : ""}</p>
     <p class="q-in">${esc(ai.ask || task.prompt)}</p>
     ${ai.ask && ai.ask !== task.prompt ? `<p class="orig">In the draft: “${esc(task.label ? task.label + ": " : "")}${esc(task.prompt)}”</p>` : ""}
+    ${ai.found ? foundHTML(ai.found) : ""}
+    ${c.deferred ? `<p class="note">You said: “${esc(c.deferred)}”${ai.found ? "" : ". Nothing in our files answers it yet."}</p>` : ""}
     ${ai.why ? `<div class="ai"><b>Copilot's read</b><p>${esc(ai.why)}</p></div>` : ""}
     ${ai.explain ? `<div class="ai"><b>Copilot explains</b><p>${esc(ai.explain)}</p></div>` : ""}
     ${c.where ? `<h3>Your answer goes into</h3><blockquote class="where">${rich(c.where)}</blockquote>` : ""}
@@ -462,16 +482,20 @@ function openContext(task) {
     ${list("The list it introduces", c.list)}${list("Just above it in the draft", c.above)}
     ${c.note ? `<h3>${c.zone === "field" ? "Notes on this field" : "Copilot's note in the draft"}</h3><p class="note">${rich(c.note, c.hi)}</p>` : ""}
     ${facts ? `<h3>What our files say</h3><ul class="facts">${facts}</ul>` : ""}
+    ${(() => {
+      const rel = (task.rec || []).filter((r) => !(ai.found && r.file === ai.found.file));   // the found box already shows that one
+      return rel.length ? `<h3>${rel[0].checked ? "Related in our files" : "Closest matches in our files"}</h3><ul class="facts">${rel.map((r) => `<li>${esc(r.text)}<small>${esc(r.file)}${r.date ? " · " + esc(r.date) : ""}</small></li>`).join("")}</ul>` : "";
+    })()}
     ${c.funder ? `<h3>The funder's question</h3><blockquote class="fq">${esc(c.funder)}</blockquote>` : ""}
     ${(c.also || []).length ? `<h3>Also used in</h3><p class="note">${esc(c.also.join(" · "))}</p>` : ""}
     ${g.draft ? `<p class="note"><a href="${esc(g.draft)}${c.line ? "#L" + c.line : ""}" target="_blank" rel="noopener">Open this spot in the draft ↗</a></p>` : ""}
     ${asked && !ai.explain ? `<p class="ctx small">You asked Copilot to explain this. It shows up here in about 10 minutes.</p>` : ""}
   </div>
-  <div class="row"><button class="btn cancel" data-s="explain" ${asked || !task.id.includes(":q:") ? "disabled" : ""}>${asked ? "Asked ✓" : "Explain more"}</button><button class="btn strike" data-s="answer">Answer ${icon("strike")}</button></div>`;
+  <div class="row"><button class="btn cancel" data-s="explain" ${asked || !task.id.includes(":q:") ? "disabled" : ""}>${asked ? "Asked ✓" : "Explain more"}</button><button class="btn strike" data-s="answer">${ai.found ? "Answer differently" : "Answer " + icon("strike")}</button></div>`;
   sheet.hidden = false;
-  const close = () => { sheet.hidden = true; scrim.remove(); };
+  const close = () => { sheet.hidden = true; scrim.remove(); refocus(); };
   scrim.onclick = close;
-  sheet.querySelector("[data-s=answer]").onclick = () => { close(); act3(task, "right"); };
+  sheet.querySelector("[data-s=answer]").onclick = () => { sheet.hidden = true; scrim.remove(); openSheet(task, "right", "Answer", true, false); };
   const ex = sheet.querySelector("[data-s=explain]");
   ex.onclick = async () => {
     const m = LS.get("explainAsked", {}); m[task.id] = Date.now(); LS.set("explainAsked", m);
@@ -483,7 +507,8 @@ function openContext(task) {
 function openSheet(task, dir, label, needText, voice) {
   const g = grantOf(task), sheet = $("#sheet"), ai = task.ai || {}, snip = task.kind === "question" ? snippet(task) : null;
   const scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
-  const chips = dir === "right" ? (ai.options || []).map((o) => `<button class="chip" data-opt="${esc(o)}">${esc(o)}</button>`).join("") : "";
+  const opts = [...new Set([...(ai.found ? [ai.found.answer] : []), ...(ai.options || [])])];
+  const chips = dir === "right" ? opts.map((o) => `<button class="chip" data-opt="${esc(o)}">${esc(o)}</button>`).join("") : "";
   sheet.innerHTML = `<div class="sheet-scroll"><h2>${esc(label)}</h2>
     <p class="ctx">${esc(g.funder || "")}${task.label ? " · " + esc(task.label) : ""}</p>
     <p class="q-in">${esc(ai.ask || task.prompt)}</p>
@@ -493,12 +518,12 @@ function openSheet(task, dir, label, needText, voice) {
     <div class="row"><button class="btn mic" data-s="mic" aria-label="Dictate">${icon("mic")}</button><span class="listening" id="lis" aria-live="polite">${window.SpeechRecognition || window.webkitSpeechRecognition ? "Tap to talk" : "Use the mic on your keyboard"}</span>${task.ctx ? `<button class="linkish" data-s="ctx">What is this for?</button>` : ""}</div></div>
     <div class="row"><button class="btn cancel" data-s="cancel">Cancel</button><button class="btn strike" data-s="go">${esc(label)} ${icon("strike")}</button></div>`;
   sheet.hidden = false;
-  const ta = $("#ans"), close = () => { stopRec(); sheet.hidden = true; scrim.remove(); };
+  const ta = $("#ans"), close = () => { stopRec(); sheet.hidden = true; scrim.remove(); refocus(); };
   scrim.onclick = close;
   sheet.querySelector("[data-s=cancel]").onclick = close;
   sheet.querySelector("[data-s=mic]").onclick = (e) => toggleRec(ta, e.currentTarget);
   const cx = sheet.querySelector("[data-s=ctx]");
-  if (cx) cx.onclick = () => { close(); openContext(task); };
+  if (cx) cx.onclick = () => { stopRec(); sheet.hidden = true; scrim.remove(); openContext(task); };
   sheet.querySelectorAll("[data-opt]").forEach((b) => (b.onclick = () => {
     const o = b.dataset.opt, at = o.indexOf("___");
     ta.value = o.replace("___", "");
@@ -511,6 +536,40 @@ function openSheet(task, dir, label, needText, voice) {
     close(); strike(task, dir, v);
   };
   if (voice) toggleRec(ta, sheet.querySelector("[data-s=mic]")); else if (!chips) setTimeout(() => ta.focus(), 50);
+}
+function openNote(gid) {
+  const grants = state.deck?.grants || [], g = grants.find((x) => x.id === gid) || null, sheet = $("#sheet");
+  const scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
+  let scope = g ? g.id : "all";
+  sheet.innerHTML = `<div class="sheet-scroll"><h2>Note for Copilot</h2>
+    <p class="ctx">Something new Copilot should know. It doesn't have to answer a card: a changed number, a new partner, a decision, a correction.</p>
+    <div class="chips" role="radiogroup" aria-label="Who it's for">
+      ${g ? `<button class="chip on" data-scope="${esc(g.id)}" role="radio" aria-checked="true">${esc(g.funder)}</button>` : ""}
+      <button class="chip${g ? "" : " on"}" data-scope="all" role="radio" aria-checked="${g ? "false" : "true"}">All grants</button>
+    </div>
+    <textarea id="ans" placeholder="Say it or type it…" aria-label="Your note"></textarea>
+    <div class="row"><button class="btn mic" data-s="mic" aria-label="Dictate">${icon("mic")}</button><span class="listening" id="lis" aria-live="polite">${window.SpeechRecognition || window.webkitSpeechRecognition ? "Tap to talk" : "Use the mic on your keyboard"}</span></div></div>
+    <div class="row"><button class="btn cancel" data-s="cancel">Cancel</button><button class="btn strike" data-s="go">Send note ${icon("note")}</button></div>`;
+  sheet.hidden = false;
+  const ta = $("#ans"), close = () => { stopRec(); sheet.hidden = true; scrim.remove(); refocus(); };
+  scrim.onclick = close;
+  sheet.querySelector("[data-s=cancel]").onclick = close;
+  sheet.querySelector("[data-s=mic]").onclick = (e) => toggleRec(ta, e.currentTarget);
+  sheet.querySelectorAll("[data-scope]").forEach((b) => (b.onclick = () => {
+    scope = b.dataset.scope;
+    sheet.querySelectorAll("[data-scope]").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", String(x === b)); });
+  }));
+  sheet.querySelector("[data-s=go]").onclick = async () => {
+    const v = ta.value.replace(/\s*\n+\s*/g, " ").trim();
+    if (!v) { ta.focus(); $("#lis").textContent = "Say or type the note first"; return; }
+    const target = scope === "all" ? (g || grants[0] || {}) : grants.find((x) => x.id === scope) || {};
+    const issue = scope === "all" ? (state.inbox || target.issue) : target.issue;   // on the inbox, /fyi means every grant
+    if (!issue) { $("#lis").textContent = "No grant card to post on yet. Try after the next sync."; return; }
+    close();
+    const ok = await post(issue, scope === "all" ? `/fyi all: ${v}` : `/fyi ${v}`, `note:${Date.now()}`);
+    toast(ok ? `Noted for ${scope === "all" ? "every grant" : target.funder}. Copilot sees it after the next sync.` : "Saved. It sends when you have signal.");
+  };
+  setTimeout(() => ta.focus(), 50);
 }
 function toggleRec(ta, btn) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -525,6 +584,7 @@ function toggleRec(ta, btn) {
   try { rec.start(); } catch { rec = null; $("#lis").textContent = "Use the mic on your keyboard"; }
 }
 function stopRec() { if (rec) { try { rec.stop(); } catch { /* already stopped */ } rec = null; } }
+function refocus() { const el = $(".stack .label:last-child"); if (el) el.focus({ preventScroll: true }); }   // keys keep working after a sheet
 
 function openSettings() {
   const sheet = $("#sheet"), scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
@@ -553,6 +613,7 @@ function icon(n) {
     later: '<path d="M10 6 4 12l6 6M5 12h15" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     shelf: '<rect x="3" y="4" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="4" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>',
     deck: '<rect x="5" y="3" width="14" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    note: '<path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M13.5 6.5l4 4" stroke="currentColor" stroke-width="2"/>',
   }[n] || "";
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
 }

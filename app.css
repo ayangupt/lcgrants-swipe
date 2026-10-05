@@ -102,6 +102,15 @@ mark.blank { background: color-mix(in srgb, var(--turmeric) 45%, transparent); c
 mark.num { background: color-mix(in srgb, var(--turmeric) 60%, transparent); color: var(--ink); padding: 0 2px; border-radius: 3px; font-weight: 700; }
 .more { align-self: flex-start; flex: none; border: 0; background: transparent; padding: 6px 0 2px; margin-top: auto; font-family: var(--cond); font-weight: 700; font-size: 15px;
   letter-spacing: .06em; text-transform: uppercase; color: var(--ink); text-decoration: underline; text-decoration-color: var(--c); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.found { flex: none; margin-top: 2px; padding: 9px 11px 8px; border-radius: 10px; border: 2px solid var(--leaf);
+  background: color-mix(in srgb, var(--leaf) 10%, var(--paper)); display: grid; gap: 3px; color: var(--ink); }
+.found .wl { font-family: var(--cond); font-weight: 700; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--leaf); }
+.found b { font-size: 18px; line-height: 1.3; }
+.found small { font-size: 13px; line-height: 1.35; color: var(--ink-soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.qdetail.warn { color: var(--vermilion); font-weight: 600; }
+.note-line { margin: 0 0 6px; }
+.note-line small { color: var(--ink-soft); font-size: 13px; }
+.chip.on { background: var(--ink); color: var(--paper); }
 .l-body { position: relative; z-index: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 2px 12px 0; }
 .funds { flex: none; margin: 0; font-size: 15px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .funds b { font-family: var(--cond); font-weight: 700; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; margin-right: 6px; }
@@ -224,6 +233,7 @@ mark.num { background: color-mix(in srgb, var(--turmeric) 60%, transparent); col
 @media (max-height: 700px) {
   .funds { display: none; } .emblem { max-height: 64px; } .stage { padding-bottom: 22px; }
   .cartouche .where, .cartouche .qdetail, .cartouche .qlabel { display: none; }
+  .cartouche .qdetail.warn { display: block; }   /* "you said pull it from past grants" changes what to do */
   .cartouche { padding: 12px 14px 10px; gap: 4px; }
   .cartouche .q { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; flex: none; font-size: 18px; }
   .more { padding-top: 2px; }
