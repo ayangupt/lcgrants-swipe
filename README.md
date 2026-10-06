@@ -16,6 +16,7 @@ decision, a blocked item, a follow-up) is a match:
 | **Use this** | On a "Found in our files" card: send the value the organization's own records already give, with its source. Prefer something else? **What is this for? → Answer differently**. |
 | Pencil (top right) | A note for Copilot that doesn't answer any card: a changed number, a new partner, a decision. Pick one grant or all grants. |
 | Boxes (top right) | Every grant with matches left, nearest deadline first. |
+| **Read the draft** | The whole application on the phone, with word counts against each limit. **N to fill in** jumps between the gaps; tap a gap to fill it in, or **Edit** any part (type or dictate). An edit only replaces that part if nobody changed it since your phone loaded it; otherwise it's kept as a comment for the writer to merge. |
 
 Questions can be reworded by Copilot, with suggested answers you can tap to fill in (you can always edit
 before sending). Copilot's text is labeled as Copilot's, and it can't add numbers that aren't already in
@@ -31,7 +32,8 @@ you set in Settings.
 - **This repository only holds the app shell** (HTML, CSS, JS, icons). It contains no grant data.
 - The data lives in a **private** repository. The app reads a task deck from that repo's pinned
   "Grant inbox" issue and sends your answers back as issue comments (`/answer`, `/pursue`, `/pass`, …),
-  using a fine-grained GitHub token that is stored only in this phone's browser storage.
+  using a fine-grained GitHub token that is stored only in this phone's browser storage. Each grant's own
+  issue carries its current draft for **Read the draft**; saved edits go back as `/edit` comments.
 - A sync job in the private repo applies those comments to the drafts (about every 10 minutes) and
   rebuilds the deck.
 - Offline? Answers wait on the phone and send when you're back online.

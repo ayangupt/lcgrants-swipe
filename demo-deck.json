@@ -42,7 +42,8 @@
      "q": "EIN (this or UBI)",
      "text": "00-0000000 (from our records, 3 files agree: sample-launch/application.md; about.md)"
     }
-   ]
+   ],
+   "read": 1
   },
   {
    "id": "sample-capital",
@@ -92,7 +93,8 @@
    "url": "https://example.org",
    "open": 0,
    "answered": 0,
-   "local": true
+   "local": true,
+   "read": 1
   }
  ],
  "tasks": [
@@ -293,5 +295,100 @@
     "note": "Sample: Status: needed for any state contract; register with the state first."
    }
   }
- ]
+ ],
+ "drafts": {
+  "sample-arts": {
+   "v": 1,
+   "file": "application-responses.md",
+   "mt": "2026-10-02T08:40-07:00",
+   "blocks": [
+    {
+     "k": "1|Sample City Arts: Neighborhood Arts (SAMPLE)|0",
+     "t": "Sample City Arts: Neighborhood Arts (SAMPLE)",
+     "l": 1,
+     "x": "**Status:** A made-up draft for the Matchbox demo. Nothing here is real.",
+     "h": "8a2098faca13",
+     "ln": 1
+    },
+    {
+     "k": "2|1. Describe your project (250 words)|0",
+     "t": "1. Describe your project (250 words)",
+     "l": 2,
+     "x": "Right now, our Saturday sing-along meets in a borrowed room that holds about 40 people, and most weeks every chair is taken. With this grant we would run twelve free evenings in a larger hall, with a guest musician each month and printed song sheets so newcomers can join in.\n\nEach evening starts with a short story about where the songs come from. Then everyone sings together, with the words projected on the wall. [NEEDS INPUT: name of the hall we would rent]",
+     "h": "ef9af34a113b",
+     "ln": 5,
+     "wl": 250
+    },
+    {
+     "k": "2|2. Who takes part? (150 words)|0",
+     "t": "2. Who takes part? (150 words)",
+     "l": 2,
+     "x": "People of every age come, from students to grandparents. About half of last season's visitors were there for the first time. [NEEDS INPUT: how many people came last season]",
+     "h": "2f4af8bccd69",
+     "ln": 11,
+     "wl": 150
+    },
+    {
+     "k": "2|3. Budget summary|0",
+     "t": "3. Budget summary",
+     "l": 2,
+     "x": "| Item | Cost |\n|---|---|\n| Hall rental, 12 evenings | $2,400.00 |\n| Guest musicians | $1,800.00 |\n| Song sheets and printing | $300.00 |\n| **Total request** | **$4,500.00** |",
+     "h": "7edcf647a040",
+     "ln": 15
+    },
+    {
+     "k": "2|4. How will you know it worked? (200 words)|0",
+     "t": "4. How will you know it worked? (200 words)",
+     "l": 2,
+     "x": "- Count who comes each evening, and how many are new\n- Ask five people each month what they would change\n- Keep a short video of each evening for people who could not come",
+     "h": "f3b546932005",
+     "ln": 24,
+     "wl": 200
+    },
+    {
+     "k": "2|Verification checklist (internal)|0",
+     "t": "Verification checklist (internal)",
+     "l": 2,
+     "x": "- [ ] Word limits checked\n- [x] Budget matches the budget sheet\n- [ ] Hall name confirmed",
+     "h": "1bfe2845c96c",
+     "ln": 30,
+     "i": 1
+    }
+   ],
+   "ed": {}
+  },
+  "sample-fund": {
+   "v": 1,
+   "file": "application-responses.md",
+   "mt": "2026-10-02T08:40-07:00",
+   "blocks": [
+    {
+     "k": "0||0",
+     "t": "(top of the document)",
+     "l": 0,
+     "x": "Dear Sample Family Foundation,\n\nThank you for the chance to share our work. This is a made-up letter for the Matchbox demo.",
+     "h": "c7b4b2ae047a",
+     "ln": 1
+    },
+    {
+     "k": "2|Who we are|0",
+     "t": "Who we are",
+     "l": 2,
+     "x": "We are a small volunteer group that runs free weekly music evenings in our neighborhood. [NEEDS INPUT: the year we started]",
+     "h": "c598e633d7db",
+     "ln": 5
+    },
+    {
+     "k": "2|What we ask for (100 words)|0",
+     "t": "What we ask for (100 words)",
+     "l": 2,
+     "x": "We ask for $5,000.00 to cover a year of hall rental, so the evenings can keep growing.\n\nSincerely,\nSample Director",
+     "h": "e6d7d0d72980",
+     "ln": 9,
+     "wl": 100
+    }
+   ],
+   "ed": {}
+  }
+ }
 }

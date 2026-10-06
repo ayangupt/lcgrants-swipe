@@ -36,15 +36,29 @@ async function gh(path, opts = {}) {
 const repo = () => LS.get("repo", "");
 { const r = new URLSearchParams(location.search).get("repo"); if (r && /^[\w.-]+\/[\w.-]+$/.test(r)) LS.set("repo", r); }
 
+async function unzip64(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  if (!("DecompressionStream" in window)) throw new Error("This browser can't open the deck. Update iOS or Chrome, then try again.");
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+function b64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function zip64(obj) {   // gzip+base64, like the sync's own payloads; plain base64 JSON where gzip isn't available
+  const raw = new TextEncoder().encode(JSON.stringify(obj));
+  if (!("CompressionStream" in window)) return b64(raw);
+  const stream = new Blob([raw]).stream().pipeThrough(new CompressionStream("gzip"));
+  return b64(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
 async function decodeDeck(body) {
   const z = /<!-- lcg:deckz ([A-Za-z0-9+/=]+) -->/.exec(body || "");
   const m = z || /<!-- lcg:deck ([A-Za-z0-9+/=]+) -->/.exec(body || "");
   if (!m) return null;
-  const bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
-  if (!z) return JSON.parse(new TextDecoder().decode(bytes));
-  if (!("DecompressionStream" in window)) throw new Error("This browser can't open the deck. Update iOS or Chrome, then try again.");
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text());
+  if (!z) return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0))));
+  return unzip64(m[1]);
 }
 
 async function fetchDeck() {
@@ -68,6 +82,7 @@ async function fetchDeck() {
     state.loading = false; render();
   }
   flushQueue();
+  if (state.pendingRead && state.deck) { const id = state.pendingRead; state.pendingRead = null; openDraft(id); }
 }
 
 /* ---------- sent / queue / stats (all on this phone) ---------- */
@@ -175,6 +190,9 @@ function render() {
   if (!LS.get("token", "") && !state.demo) { app.innerHTML = setupView(); bindSetup(); return; }
   if (!state.deck && state.loading) { app.innerHTML = `<div></div><div class="boot">Opening the box…</div><div></div>`; return; }
   if (!state.deck) { app.className = ""; app.innerHTML = `<div></div>${emptyView("Can't open the box yet", state.error || "No deck loaded.", true)}<div></div>`; bindCommon(); return; }
+  if (state.view === "draft" && state.read) {
+    app.className = "reading"; app.innerHTML = draftView() + footView(); bindCommon(); bindDraft(); return;
+  }
   app.className = state.view === "deck" ? "fit" : "";
   app.innerHTML = stripView() + (state.view === "shelf" ? shelfView() : deckView()) + footView();
   bindCommon();
@@ -193,19 +211,24 @@ function stripView() {
   </header>`;
 }
 
-function labelHTML(task, cls, pos) {
-  const g = grantOf(task), k = kindOf(task), ink = inkOf(g);
+function stampHTML(g) {
   const d = g.days, hot = d != null && d <= 3;
-  const stamp = g.deadline === "rolling" ? `<b>ROLL</b><small>rolling</small>`
+  const inner = g.deadline === "rolling" ? `<b>ROLL</b><small>rolling</small>`
     : d == null ? `<b>—</b><small>no date</small>`
     : `<b>${d < 0 ? "LATE" : d === 0 ? "TODAY" : d + "d"}</b><small>${esc(fmtDate(g.deadline))}</small>`;
+  return `<div class="stamp ${hot ? "hot" : ""}" aria-label="Due ${esc(g.deadline || "no date")}">${inner}</div>`;
+}
+const readable = (g) => !!(g && (g.read || (state.demo && state.deck?.drafts?.[g.id])));
+
+function labelHTML(task, cls, pos) {
+  const g = grantOf(task), k = kindOf(task), ink = inkOf(g);
   if (pos === 0 && state.flipped) return backHTML(task, g, ink, cls);
   const mine = (state.deck?.tasks || []).filter((t) => t.grant === task.grant), sent = LS.get("sent", {});
   const ask = (task.ai && task.ai.ask) || task.prompt, found = task.ai && task.ai.found;
   const struck = mine.filter((t) => sent[t.id]).length, len = (ask || "").length;
   const snip = found ? null : snippet(task);
   return `<article class="label c-${ink} ${cls}" data-id="${esc(task.id)}" ${pos === 0 ? 'tabindex="0" aria-roledescription="swipe card"' : 'aria-hidden="true"'}>
-    <div class="l-head"><h2 class="funder${longWord(g.funder || g.title) ? " long" : ""}">${esc(g.funder || g.title || "Grant")}</h2><div class="stamp ${hot ? "hot" : ""}" aria-label="Due ${esc(g.deadline || "no date")}">${stamp}</div></div>
+    <div class="l-head"><h2 class="funder${longWord(g.funder || g.title) ? " long" : ""}">${esc(g.funder || g.title || "Grant")}</h2>${stampHTML(g)}</div>
     <div class="l-meta"><span>${esc(k.tag)}</span></div>
     <div class="cartouche">
       ${task.label ? `<div class="qlabel">${esc(task.label)}</div>` : ""}
@@ -222,7 +245,7 @@ function labelHTML(task, cls, pos) {
       ${mine.length > 1 ? `<div class="boxprog" aria-label="${struck} of ${mine.length} matches struck for this grant">${mine.map((t) => `<i class="${sent[t.id] ? "done" : ""}"></i>`).join("")}<span>${struck} of ${mine.length} struck</span></div>` : ""}
       ${LOTUS}
     </div>
-    <div class="l-foot"><button class="flip" data-act="flip">About this grant</button><span>+${task.xp || 10}</span></div>
+    <div class="l-foot"><button class="flip" data-act="flip">About this grant</button>${readable(g) ? `<button class="flip" data-act="read" data-grant="${esc(g.id)}">Read the draft</button>` : ""}<span>+${task.xp || 10}</span></div>
     <div class="striker" aria-hidden="true"><span>← Later</span><span>${esc(k.right)} →</span></div>
     ${pos === 0 ? `<div class="hint r">${esc(k.right)}</div><div class="hint l">Later</div>${k.up ? `<div class="hint u">${esc(k.up)}</div>` : ""}${k.down ? `<div class="hint d">${esc(k.down)}</div>` : ""}` : ""}
   </article>`;
@@ -263,6 +286,7 @@ function backHTML(task, g, ink, cls) {
       ${(g.why || []).length ? `<h3>Why it needs you</h3><p>${esc(g.why.join("; "))}</p>` : ""}
       ${(g.notes || []).length ? `<h3>Your notes for Copilot</h3>${g.notes.map((n) => `<p class="note-line">${esc(n.text)} <small>${esc(n.date)}${n.all ? " · all grants" : ""}</small></p>`).join("")}` : ""}
       ${(g.filled || []).length ? `<h3>Filled from our records</h3>${g.filled.map((f) => `<p class="note-line">${esc(f.q)}: <b>${esc(f.text.split(" (")[0])}</b></p>`).join("")}` : ""}
+      ${readable(g) ? `<button class="more" data-act="read" data-grant="${esc(g.id)}">Read and edit the application ›</button>` : ""}
       <button class="more" data-act="note" data-grant="${esc(g.id)}">Add a note for Copilot ›</button>
       ${g.local === false ? `<p>This draft lives in another Copilot session. Your answers are saved next to it.</p>` : ""}
       <p>${g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener noreferrer">Funder page ↗</a> · ` : ""}${g.issue ? `<a href="https://github.com/${esc(repo())}/issues/${g.issue}" target="_blank" rel="noopener">Card on GitHub ↗</a>` : ""}</p>
@@ -276,10 +300,11 @@ function backHTML(task, g, ink, cls) {
 function deckView() {
   const tasks = visibleTasks();
   if (!tasks.length) {
-    const sentN = Object.keys(LS.get("sent", {})).length;
+    const sentN = Object.keys(LS.get("sent", {})).length, fg = state.focus && (state.deck?.grants || []).find((g) => g.id === state.focus);
     return `<section class="stage">${emptyView(state.focus ? "This box is empty" : "Box is empty",
       sentN ? `${sentN} repl${sentN === 1 ? "y is" : "ies are"} on the way to the drafts. New matches arrive after the next sync.` :
-        "Nothing needs you right now. New matches arrive after the next sync.", false)}</section>`;
+        "Nothing needs you right now. New matches arrive after the next sync.", false,
+      readable(fg) ? `<button class="btn strike" data-act="read" data-grant="${esc(fg.id)}">Read the application</button>` : "")}</section>`;
   }
   const top = tasks.slice(0, 3);
   const k = kindOf(tasks[0]);
@@ -301,10 +326,13 @@ function shelfView() {
     const left = mine.filter((t) => !sent[t.id]).length;
     const sticks = mine.map((t) => `<i class="${sent[t.id] ? "done" : ""}"></i>`).join("");
     const d = g.days;
-    return `<button class="box c-${inkOf(g)}" data-act="focus" data-grant="${esc(g.id)}">
-      <span class="bn">${esc(g.funder)}</span>
-      <span class="bd">${g.deadline === "rolling" ? "Rolling" : d == null ? "No date" : d < 0 ? "Late" : d === 0 ? "Due today" : `Due in ${d}d`} · ${left} left</span>
-      <span class="sticks" aria-hidden="true">${sticks}</span></button>`;
+    return `<div class="box c-${inkOf(g)}">
+      <button class="box-main" data-act="focus" data-grant="${esc(g.id)}">
+        <span class="bn">${esc(g.funder)}</span>
+        <span class="bd">${g.deadline === "rolling" ? "Rolling" : d == null ? "No date" : d < 0 ? "Late" : d === 0 ? "Due today" : `Due in ${d}d`} · ${left} left</span>
+        <span class="sticks" aria-hidden="true">${sticks}</span></button>
+      ${readable(g) ? `<button class="box-read" data-act="read" data-grant="${esc(g.id)}" aria-label="Read the ${esc(g.funder)} application">Read the draft ›</button>` : ""}
+    </div>`;
   }).join("");
   return `<section class="shelf"><h2 class="shelf-title">Boxes <span>${(state.deck.grants || []).length}</span></h2>${boxes}</section>`;
 }
@@ -321,9 +349,9 @@ function footView() {
   </footer>${state.error ? `<p class="sub err" role="alert">${esc(state.error)}</p>` : ""}`;
 }
 
-function emptyView(title, text, retry) {
+function emptyView(title, text, retry, extra = "") {
   return `<div class="empty"><svg width="88" height="64" viewBox="0 0 88 64" aria-hidden="true"><rect x="4" y="14" width="80" height="46" rx="6" fill="#c62a1f"/><rect x="10" y="20" width="68" height="34" rx="3" fill="none" stroke="#fffaf0" stroke-width="2"/><rect x="4" y="6" width="80" height="12" rx="4" fill="#f4b41a"/></svg>
-    <h2>${esc(title)}</h2><p>${esc(text)}</p>${retry ? `<button class="btn strike" data-act="refresh">Try again</button><button class="btn later" data-act="settings">Settings</button>` : ""}</div>`;
+    <h2>${esc(title)}</h2><p>${esc(text)}</p>${retry ? `<button class="btn strike" data-act="refresh">Try again</button><button class="btn later" data-act="settings">Settings</button>` : ""}${extra}</div>`;
 }
 
 function setupView() {
@@ -359,6 +387,18 @@ function bindCommon() {
 }
 function onAct(e, b) {
   const act = b.dataset.act, top = visibleTasks()[0];
+  if (act === "read") { e.stopPropagation(); openDraft(b.dataset.grant || state.focus || (top && top.grant)); return; }
+  if (state.view === "draft" && state.read) {
+    if (act === "back") closeDraft();
+    else if (act === "edit") openEditor(+b.dataset.i);
+    else if (act === "fill") openEditor(+b.dataset.i, +b.dataset.n);
+    else if (act === "gap") nextGap();
+    else if (act === "dismiss") { const eds = LS.get("edits", {}); delete eds[b.dataset.e]; LS.set("edits", eds); render(); }
+    else if (act === "refresh") { loadDraft(state.read); fetchDeck(); }
+    else if (act === "settings") openSettings();
+    else if (act === "unfocus") { state.focus = null; closeDraft(); }
+    return;
+  }
   if (act === "shelf") { state.view = state.view === "shelf" ? "deck" : "shelf"; state.flipped = false; render(); }
   else if (act === "focus") { state.focus = b.dataset.grant; state.view = "deck"; state.flipped = false; render(); }
   else if (act === "unfocus") { state.focus = null; render(); }
@@ -412,6 +452,7 @@ function bindSwipe() {
   };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("keydown", (e) => {
+    if (e.target !== el) return;                 // Enter on a button inside the card is that button's, not a strike
     if (e.key === "ArrowRight" || e.key === "Enter") act3(task, "right");
     else if (e.key === "ArrowLeft") flyOut(task, "left");
     else if (e.key === "ArrowUp" && k.up) act3(task, "up");
@@ -460,6 +501,348 @@ function sparks(el) {
   }
 }
 
+/* ---------- the application: read it, edit it ----------
+   Each grant's card issue carries its current draft (tools/phone.py draft_payload: blocks with key, title,
+   level, text, fingerprint). Edits go back as `/edit <id>` comments with a fenced payload; the sync writes
+   them only if that part still matches the fingerprint the phone started from. Otherwise the edit becomes
+   a comment for Copilot to merge, and the draft's `ed` map tells this phone what happened. */
+const NEEDS = /\[NEEDS INPUT[^\]]*\]/g;
+const LIMIT_RX = /\s*\((\d[\d,]*)\s*(?:words?|char(?:acter)?s?)\)\s*$/i;
+function words(text) {    // the same count as lcgrants.count_words, so the phone agrees with the lint
+  const clean = text.split("\n").filter((l) => !/^\s*(Source:|<!--)/.test(l)).join("\n").replace(NEEDS, "");
+  return (clean.match(/[A-Za-z0-9$][\p{L}\p{N}_'’$%,.\-]*/gu) || []).length;   // \p{L}\p{N}_ = Python's Unicode \w
+}
+function chars(text) {
+  return [...text.replace(NEEDS, "").trim().split(/\r?\n/).map((l) => l.replace(/\s+$/, "")).join("\n")].length;
+}
+const normText = (s) => String(s || "").replace(/\r\n/g, "\n").replace(/^(\s*\n)+/, "").replace(/(\n\s*(---)?\s*)+$/, "").replace(/\s+$/, "");
+const partTitle = (b) => (b.l ? b.t.replace(LIMIT_RX, "") : "") || "Top of the document";
+const grantById = (id) => (state.deck?.grants || []).find((g) => g.id === id) || { id };
+
+function mdInline(s) {
+  const keep = [], hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
+  const fmt = (h) => h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
+    .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\s][^_]*?)_(?!\w)/g, "$1<i>$2</i>");
+  let h = esc(s);
+  h = h.replace(/`([^`]+)`/g, (m, x) => hold(`<code>${x}</code>`));
+  h = h.replace(/\[NEEDS INPUT([^\]]*)\]/g, (m, x) => hold(`<mark class="gap">NEEDS INPUT${fmt(x)}</mark>`));
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, t, u) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`));
+  return fmt(h).replace(/\u0000(\d+)\u0000/g, (m, n) => keep[+n]);
+}
+function mdTable(rows) {
+  const cells = (r) => r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const sep = rows[1] && /^\s*\|?\s*:?-{2,}/.test(rows[1]);
+  const head = sep ? cells(rows[0]) : null, body = rows.slice(sep ? 2 : 0).map(cells);
+  return `<div class="tbl" tabindex="0" role="region" aria-label="Table"><table>${head ? `<thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join("")}</tr></thead>` : ""}<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function md(text) {      // a small, safe Markdown reader: everything is escaped first; links are http(s) only
+  const src = String(text || "").replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/);
+  const LI = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/, STOP = /^\s*(```|~~~|\||>|#{1,6}\s|([-*+]|\d+[.)])\s)/;
+  let out = "", i = 0;
+  while (i < src.length) {
+    const line = src[i];
+    if (!line.trim()) { i++; continue; }
+    if (/^\s*(```|~~~)/.test(line)) {
+      const f = line.trim().slice(0, 3), buf = []; i++;
+      while (i < src.length && !src[i].trim().startsWith(f)) buf.push(src[i++]);
+      i++; out += `<pre>${esc(buf.join("\n"))}</pre>`; continue;
+    }
+    const h = /^\s*#{1,6}\s+(.*?)[\s#]*$/.exec(line);
+    if (h) { out += `<h5>${mdInline(h[1])}</h5>`; i++; continue; }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { out += "<hr>"; i++; continue; }
+    if (/^\s*\|/.test(line)) { const rows = []; while (i < src.length && /^\s*\|/.test(src[i])) rows.push(src[i++]); out += mdTable(rows); continue; }
+    if (/^\s*>/.test(line)) {
+      const buf = []; while (i < src.length && /^\s*>/.test(src[i])) buf.push(src[i++].replace(/^\s*>\s?/, ""));
+      out += `<blockquote>${md(buf.join("\n"))}</blockquote>`; continue;
+    }
+    if (LI.test(line)) {
+      const ordered = /\d/.test(LI.exec(line)[2]), items = [];
+      while (i < src.length && (LI.test(src[i]) || (items.length && src[i].trim() && /^\s{2,}/.test(src[i])))) {
+        const m = LI.exec(src[i]);
+        if (m) items.push({ nest: m[1].length >= 2, t: m[3] }); else items[items.length - 1].t += " " + src[i].trim();
+        i++;
+      }
+      const box = (t) => t.replace(/^\[ \]\s+/, "☐ ").replace(/^\[[xX]\]\s+/, "☑ ");
+      out += `<${ordered ? "ol" : "ul"}>${items.map((it) => `<li${it.nest ? ' class="nest"' : ""}>${mdInline(box(it.t))}</li>`).join("")}</${ordered ? "ol" : "ul"}>`;
+      continue;
+    }
+    const buf = [line]; i++;
+    while (i < src.length && src[i].trim() && !STOP.test(src[i])) buf.push(src[i++]);
+    let para = "";      // wrapped prose joins up; short lines, **Label:** lines and two-space breaks stay separate
+    buf.forEach((l, k) => {
+      if (k) para += /(\s{2}|\\)$/.test(buf[k - 1]) || buf[k - 1].trim().length < 50 || /^\s*(\*\*|__)/.test(l) ? "\n" : " ";
+      para += k ? l.trim() : l.trimEnd();
+    });
+    out += `<p>${mdInline(para.replace(/\\\n/g, "\n")).replace(/\n/g, "<br>")}</p>`;
+  }
+  return out;
+}
+
+/* pending phone edits, kept on this phone until the draft shows what happened to them */
+const pendingFor = (gid, key) => Object.values(LS.get("edits", {})).filter((e) => e.gid === gid && e.key === key).sort((a, b) => b.at - a.at)[0] || null;
+// a pending edit still applies to what's on screen only if the part is what it was built on: the text it
+// started from, or what an earlier edit in its chain produced (the sync echoes each outcome's fingerprint)
+function liveEdit(p, b, ed) {
+  if (!p || p.status === "conflict") return null;
+  if (!p.base || p.base === b.h) return p;
+  return (p.chain || []).some((id) => { const o = (ed || {})[id]; return o && (o[0] === "ok" || o[0] === "same") && o[2] === b.h; }) ? p : null;
+}
+const cardOf = (r) => r.issue || grantById(r.gid).issue || null;
+function reconcileEdits(gid, data) {
+  const eds = LS.get("edits", {}), out = data.ed || {};
+  let saved = 0, bounced = 0;
+  for (const [id, e] of Object.entries(eds)) {
+    if (e.gid !== gid) continue;
+    const o = out[id];
+    if (o && (o[0] === "ok" || o[0] === "same")) { delete eds[id]; saved++; }
+    else if (o && e.status !== "conflict") { e.status = "conflict"; e.why = o[0]; bounced++; }
+    else if (!o && Date.now() - e.at > 4 * 864e5) delete eds[id];          // never arrived: stop showing it
+  }
+  LS.set("edits", eds);
+  if (bounced) toast(`${bounced} edit${bounced === 1 ? "" : "s"} couldn't go in: that part changed first. It's with Copilot as a comment.`);
+  else if (saved) toast(`Your edit${saved === 1 ? " is" : "s are"} in the draft.`);
+}
+
+function cacheDraft(gid, z, issue) {
+  try {
+    LS.set("draft:" + gid, { z, at: Date.now(), issue });
+    const ids = [gid, ...LS.get("draftIds", []).filter((x) => x !== gid)];
+    ids.slice(8).forEach((x) => LS.del("draft:" + x));
+    LS.set("draftIds", ids.slice(0, 8));
+  } catch { /* storage full: the draft stays in memory for this visit */ }
+}
+async function openDraft(gid, line) {
+  if (!gid) return;
+  if (state.view !== "draft") state.prevView = state.view;
+  state.view = "draft"; state.flipped = false;
+  const c = LS.get("draft:" + gid, null);
+  const r = state.read = { gid, line: line || null, data: null, at: null, loading: true, error: null, open: new Set(),
+    issue: grantById(gid).issue || (c && c.issue) || null };
+  if (c && c.z) { try { r.data = await unzip64(c.z); r.at = c.at; } catch { /* stale cache: refetch */ } }
+  if (state.read !== r) return;
+  render(); window.scrollTo(0, 0);
+  loadDraft(r);
+}
+async function loadDraft(r) {
+  r.loading = true; r.error = null;
+  if (state.read === r && r.data) render();
+  try {
+    let data, z = null;
+    if (state.demo) data = JSON.parse(JSON.stringify((state.deck.drafts || {})[r.gid] || null));
+    else {
+      const issue = cardOf(r);
+      if (!issue) throw new Error("This grant isn't in your inbox right now, so its draft can't be refreshed or edited from the phone.");
+      const iss = await gh(`/repos/${repo()}/issues/${issue}`);
+      const m = /<!-- lcg:draftz ([A-Za-z0-9+/=]+) -->/.exec(iss.body || "");
+      if (m) { z = m[1]; data = await unzip64(z); r.issue = issue; }
+    }
+    if (!data) throw new Error("There's no draft for this grant on the phone yet. It's added on the next sync once a draft exists.");
+    r.data = data; r.at = Date.now();
+    if (z) cacheDraft(r.gid, z, r.issue);
+    reconcileEdits(r.gid, data);
+  } catch (e) {
+    r.error = navigator.onLine ? e.message : "You're offline. Showing the copy saved on this phone.";
+  } finally {
+    r.loading = false;
+    if (state.read === r && state.view === "draft") render();
+  }
+}
+function closeDraft() {
+  state.view = state.prevView && state.prevView !== "draft" ? state.prevView : "deck";
+  state.read = null;
+  if (/read=/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
+  render(); window.scrollTo(0, 0);
+}
+
+function pendHTML(p, stale) {
+  if (p.status === "conflict") {
+    return `<div class="pend bad" role="status"><b>Your phone edit didn't go in</b>
+      <p>${p.why === "missing" ? "This part's heading changed before your edit arrived." : p.why === "error" ? "It couldn't be saved." : "This part changed before your edit arrived."} Your version is with Copilot as a comment to merge, so nothing is lost.</p>
+      <details><summary>Your version</summary><div class="md">${md(p.text)}</div></details>
+      <button class="linkish" data-act="dismiss" data-e="${esc(p.id)}">OK, got it</button></div>`;
+  }
+  if (stale) {
+    return `<div class="pend bad" role="status"><b>This part changed after your edit</b>
+      <p>Below is the newer text. Your edit is still on its way; when it arrives it's kept as a comment for Copilot to merge, not written over this.</p>
+      <details><summary>Your edit</summary><div class="md">${md(p.text)}</div></details></div>`;
+  }
+  const queued = LS.get("queue", []).some((q) => q.id === "edit:" + p.id);
+  return `<div class="pend" role="status"><b>${queued ? "Waiting for signal" : "Sent"}</b> ${queued ? "It sends when you're back online." : "Your edit lands in the draft within ~10 min."}</div>`;
+}
+function blockHTML(gid, b, i, canEdit) {
+  const pend = pendingFor(gid, b.k), live = liveEdit(pend, b, state.read.data.ed), stale = !!(pend && !live && pend.status !== "conflict");
+  const text = live ? live.text : b.x, title = partTitle(b);
+  const w = words(text), c = chars(text), over = (b.wl && w > b.wl) || (b.cl && c > b.cl);
+  const count = b.wl ? `${w} / ${b.wl} words` : b.cl ? `${c} / ${b.cl} characters` : b.l >= 2 ? `${w} words` : "";
+  let n = 0;
+  const body = b.cut ? `<p class="cut">Too long to carry on the phone. Read this part on the desktop Grant board.</p>`
+    : text.trim() ? md(text).replace(/<mark class="gap">/g, () => canEdit ? `<mark class="gap" data-act="fill" data-i="${i}" data-n="${n++}" role="button" tabindex="0" title="Fill this in">` : `<mark class="gap">`)
+    : `<p class="none">Nothing here yet.</p>`;
+  const tag = b.l <= 1 ? "h2" : b.l === 2 ? "h3" : "h4";
+  const head = `<header class="blk-h">${b.l ? `<${tag} class="blk-t">${mdInline(title)}</${tag}>` : ""}
+      <div class="blk-tools">${count ? `<span class="wc${over ? " over" : ""}">${count}${over ? " · over" : ""}</span>` : ""}${b.cut || !canEdit ? "" : `<button class="blk-edit" data-act="edit" data-i="${i}" aria-label="Edit ${esc(title)}">${icon("note")}Edit</button>`}</div></header>`;
+  const inner = `${head}${pend ? pendHTML(pend, stale) : ""}<div class="md${live ? " is-pending" : ""}">${body}</div>`;
+  if (b.i) return `<details class="blk internal" id="b${i}" data-i="${i}"${state.read.open.has(i) ? " open" : ""}><summary>Copilot's working notes · ${esc(title)}</summary>${inner}</details>`;
+  return `<section class="blk lv${b.l}" id="b${i}">${inner}</section>`;
+}
+function draftView() {
+  const r = state.read, g = grantById(r.gid), d = r.data;
+  const head = `<header class="rd-top c-${inkOf(g)}">
+    <button class="rd-back" data-act="back" aria-label="Back to the ${state.prevView === "shelf" ? "boxes" : "deck"}">${icon("back")}</button>
+    <div class="rd-t"><small>The application</small><h1 class="${longWord(g.funder) ? "long" : ""}">${esc(g.funder || g.title || r.gid)}</h1></div>
+    ${stampHTML(g)}</header>`;
+  if (!d) {
+    return head + `<section class="rd">${r.loading ? `<div class="boot">Unfolding the draft…</div>`
+      : emptyView("No draft on the phone", r.error || "Nothing to show yet.", false, `<button class="btn later" data-act="back">Back</button>`)}</section>`;
+  }
+  const blocks = d.blocks || [], parts = blocks.map((b, i) => ({ b, i })).filter((x) => !x.b.i && x.b.l >= 2);
+  const canEdit = state.demo || !!cardOf(r);
+  const gaps = blocks.filter((b) => !b.i).reduce((n, b) => {
+    const p = liveEdit(pendingFor(r.gid, b.k), b, d.ed), t = p ? p.text : b.x;
+    return n + (t.replace(/<!--[\s\S]*?-->/g, "").match(NEEDS) || []).length;
+  }, 0);
+  const pend = Object.values(LS.get("edits", {})).filter((e) => e.gid === r.gid && e.status !== "conflict").length;
+  const changed = d.mt ? new Date(d.mt) : null;
+  return head + `<section class="rd">
+    <div class="rd-bar">
+      <span>${changed && !isNaN(changed) ? `Changed ${esc(fmtWhen(changed))}` : ""}${r.loading ? " · checking…" : ""}${pend ? ` · <b class="pending">${pend} edit${pend === 1 ? "" : "s"} on the way</b>` : ""}</span>
+      ${gaps ? `<button class="rd-gaps" data-act="gap">${gaps} to fill in ›</button>` : `<span class="rd-ok">Nothing left to fill in</span>`}
+    </div>
+    ${parts.length > 2 ? `<label class="rd-jump"><span>Jump to</span><select id="jump" aria-label="Jump to a part of the application"><option value="">${parts.length} parts…</option>${parts.map((x) => `<option value="${x.i}">${esc(partTitle(x.b).slice(0, 70))}</option>`).join("")}</select></label>` : ""}
+    ${r.error ? `<p class="rd-err" role="alert">${esc(r.error)}</p>` : ""}
+    <article class="paper">${blocks.map((b, i) => blockHTML(r.gid, b, i, canEdit)).join("")}</article>
+    <p class="rd-end">${esc(d.file || "")}${canEdit ? " · tap <b>Edit</b> on any part, or a yellow gap to fill it in" : " · read only on the phone right now"}</p>
+  </section>`;
+}
+function fmtWhen(d) {
+  const mins = Math.round((Date.now() - d) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 20 * 60) return `${Math.round(mins / 60)} h ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function bindDraft() {
+  const r = state.read;
+  if (!r || !r.data) return;
+  const j = $("#jump");
+  if (j) j.onchange = () => { const el = document.getElementById("b" + j.value); if (el) { el.scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" }); el.focus?.({ preventScroll: true }); } j.value = ""; };
+  document.querySelectorAll("details.blk").forEach((el) => (el.ontoggle = () => { const i = +el.dataset.i; el.open ? r.open.add(i) : r.open.delete(i); }));
+  document.querySelectorAll("mark.gap").forEach((m) => (m.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); m.click(); } }));
+  if (r.line) {
+    const at = r.line; r.line = null;
+    let idx = 0; (r.data.blocks || []).forEach((b, i) => { if ((b.ln || 0) <= at) idx = i; });
+    const el = document.getElementById("b" + idx);
+    if (el) {
+      if (el.tagName === "DETAILS") { el.open = true; r.open.add(idx); }
+      requestAnimationFrame(() => { el.scrollIntoView({ block: "start" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600); });
+    }
+  }
+}
+function nextGap() {
+  const marks = [...document.querySelectorAll(".paper mark.gap")].filter((m) => !m.closest("details:not([open])"));
+  if (!marks.length) return;
+  const line = ($(".rd-top")?.getBoundingClientRect().bottom || 0) + 12;
+  const next = marks.find((m) => m.getBoundingClientRect().top > line + 4) || marks[0];
+  next.scrollIntoView({ block: "center", behavior: reduced() ? "auto" : "smooth" });
+  next.classList.add("flash"); setTimeout(() => next.classList.remove("flash"), 1400);
+}
+
+function gapRanges(text) {   // [NEEDS INPUT …] spans the reader shows (not ones inside <!-- comments -->)
+  const skip = [...text.matchAll(/<!--[\s\S]*?-->/g)].map((m) => [m.index, m.index + m[0].length]);
+  return [...text.matchAll(NEEDS)].map((m) => [m.index, m.index + m[0].length]).filter(([a]) => !skip.some(([s, e]) => a >= s && a < e));
+}
+function openEditor(i, gapN) {
+  const r = state.read, b = r && r.data && r.data.blocks[i];
+  if (!b) return;
+  const gid = r.gid, g = grantById(gid), title = partTitle(b);
+  const pend = pendingFor(gid, b.k), live = liveEdit(pend, b, r.data.ed);
+  const start = live ? live.text : b.x;
+  const typing = LS.get("typing", null);
+  const resumed = typing && typing.gid === gid && typing.key === b.k && typing.base === b.h && typing.from === start && normText(typing.text) !== normText(start);
+  const sheet = $("#sheet"), scrim = document.createElement("div"); scrim.className = "scrim"; document.body.appendChild(scrim);
+  sheet.classList.add("tall");
+  sheet.innerHTML = `<div class="sheet-scroll"><h2>Edit</h2>
+    <p class="ctx">${esc(g.funder || "")} · ${esc(title)}</p>
+    ${live ? `<p class="ed-note">This includes your edit that's still on its way.</p>` : ""}
+    ${resumed ? `<p class="ed-note">Picked up where you left off. <button class="linkish" data-s="over">Start over</button></p>` : ""}
+    <textarea id="ans" class="ed-ta" aria-label="Text of ${esc(title)}" spellcheck="true" autocapitalize="sentences"></textarea>
+    <div class="row"><button class="btn mic" data-s="mic" aria-label="Dictate at the cursor">${icon("mic")}</button><span class="listening" id="lis" aria-live="polite">${window.SpeechRecognition || window.webkitSpeechRecognition ? "Tap to talk" : "Use the mic on your keyboard"}</span><span class="wc" id="wc" aria-live="polite"></span></div></div>
+    <div class="row"><button class="btn cancel" data-s="cancel">Cancel</button><button class="btn strike" data-s="go">Save ${icon("strike")}</button></div>`;
+  sheet.hidden = false; fitSheet();
+  const ta = $("#ans"), wc = $("#wc"), go = sheet.querySelector("[data-s=go]"), cancel = sheet.querySelector("[data-s=cancel]");
+  ta.value = resumed ? typing.text : start;
+  const count = () => {
+    const w = words(ta.value), c = chars(ta.value), over = (b.wl && w > b.wl) || (b.cl && c > b.cl);
+    wc.textContent = b.wl ? `${w} / ${b.wl} words` : b.cl ? `${c} / ${b.cl} chars` : `${w} words`;
+    wc.classList.toggle("over", !!over);
+  };
+  let armed = false;
+  const dirty = () => normText(ta.value) !== normText(start);
+  const close = (keep) => {
+    stopRec(); sheet.hidden = true; sheet.classList.remove("tall"); scrim.remove();
+    if (!keep) LS.del("typing");
+  };
+  const tryClose = () => {
+    if (!dirty() || armed) { close(false); return; }
+    armed = true; cancel.textContent = "Discard changes?"; cancel.classList.add("warn");
+    setTimeout(() => { armed = false; cancel.textContent = "Cancel"; cancel.classList.remove("warn"); }, 3000);
+  };
+  ta.oninput = () => { count(); LS.set("typing", { gid, key: b.k, base: b.h, from: start, text: ta.value, at: Date.now() }); };
+  scrim.onclick = tryClose; cancel.onclick = tryClose;
+  sheet.querySelector("[data-s=mic]").onclick = (e) => toggleRec(ta, e.currentTarget);
+  const over = sheet.querySelector("[data-s=over]");
+  if (over) over.onclick = () => { ta.value = start; LS.del("typing"); over.parentElement.remove(); count(); ta.focus(); };
+  go.onclick = async () => {
+    if (!dirty()) { close(false); toast("No changes to send."); return; }
+    go.disabled = true; go.textContent = "Sending…";
+    try {
+      const ok = await sendEdit(r, b, ta.value, live);
+      close(false); render();
+      toast(state.demo ? "Saved in the demo. Nothing leaves this phone." : ok ? "Sent. It lands in the draft within 10 min." : "Saved. It sends when you have signal.");
+      if (navigator.vibrate) navigator.vibrate(18);
+    } catch (e) {
+      go.disabled = false; go.innerHTML = `Save ${icon("strike")}`; $("#lis").textContent = e.message;
+    }
+  };
+  count();
+  setTimeout(() => {
+    ta.focus({ preventScroll: true });
+    const gap = gapN != null ? gapRanges(ta.value)[gapN] : null;
+    if (gap) { ta.setSelectionRange(gap[0], gap[1]); const lh = parseFloat(getComputedStyle(ta).lineHeight) || 24; ta.scrollTop = Math.max(0, (ta.value.slice(0, gap[0]).split("\n").length - 2) * lh); }
+    else ta.setSelectionRange(ta.value.length, ta.value.length);
+  }, 60);
+}
+async function sendEdit(r, b, text, prev) {
+  const gid = r.gid, issue = cardOf(r), title = partTitle(b).replace(/[`\n]/g, "'");
+  if (!state.demo && !issue) throw new Error("This grant isn't in your inbox right now, so the phone can't send edits to it.");
+  const id = "e" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  let base = b.h, after = null, chain = [];
+  if (prev) {   // built on an edit that hasn't landed yet
+    const q = LS.get("queue", []), unsent = q.some((x) => x.id === "edit:" + prev.id);
+    base = prev.base || b.h; chain = prev.chain || [];
+    if (unsent) { LS.set("queue", q.filter((x) => x.id !== "edit:" + prev.id)); after = prev.prev || null; }   // never left the phone: this replaces it
+    else { after = prev.id; chain = [...chain, prev.id]; }
+  }
+  const z = await zip64({ v: 1, id, file: r.data.file, key: b.k, base, text, ...(after ? { prev: after } : {}) });
+  if (z.length > 60000) throw new Error("This part is too long to send from the phone. Edit it on the desktop.");
+  const eds = LS.get("edits", {});
+  if (prev) delete eds[prev.id];
+  if (state.demo) { b.x = normText(text); LS.set("edits", eds); bumpStats({ xp: 15 }); return true; }   // demo: only this phone changes
+  eds[id] = { id, gid, key: b.k, title, text, base, chain: chain.slice(-10), ...(after ? { prev: after } : {}), at: Date.now(), status: "sent" };
+  LS.set("edits", eds);
+  bumpStats({ xp: 15 });
+  return post(issue, `/edit ${gid}\n✏️ Edited “${title}” in Matchbox on my phone.\n\n\`\`\`lcg-edit\n${z}\n\`\`\``, "edit:" + id);
+}
+function fitSheet() {     // keep the open sheet above the on-screen keyboard (iOS doesn't resize the page for it)
+  const vv = window.visualViewport, sheet = $("#sheet");
+  if (!vv || !sheet) return;
+  if (sheet.hidden) { sheet.style.bottom = ""; sheet.style.maxHeight = ""; return; }
+  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  sheet.style.bottom = kb ? kb + "px" : "";
+  sheet.style.maxHeight = kb ? (vv.height - 8) + "px" : "";
+}
+if (window.visualViewport) { visualViewport.addEventListener("resize", fitSheet); visualViewport.addEventListener("scroll", fitSheet); }
+
 /* ---------- sheet + voice ---------- */
 let rec = null;
 function openContext(task) {
@@ -488,13 +871,16 @@ function openContext(task) {
     })()}
     ${c.funder ? `<h3>The funder's question</h3><blockquote class="fq">${esc(c.funder)}</blockquote>` : ""}
     ${(c.also || []).length ? `<h3>Also used in</h3><p class="note">${esc(c.also.join(" · "))}</p>` : ""}
-    ${g.draft ? `<p class="note"><a href="${esc(g.draft)}${c.line ? "#L" + c.line : ""}" target="_blank" rel="noopener">Open this spot in the draft ↗</a></p>` : ""}
+    ${readable(g) ? `<p class="note"><button class="linkish inapp" data-s="read">See it in the application ›</button></p>` : ""}
+    ${g.draft ? `<p class="note"><a href="${esc(g.draft)}${c.line ? "#L" + c.line : ""}" target="_blank" rel="noopener">Open this spot on GitHub ↗</a></p>` : ""}
     ${asked && !ai.explain ? `<p class="ctx small">You asked Copilot to explain this. It shows up here in about 10 minutes.</p>` : ""}
   </div>
   <div class="row"><button class="btn cancel" data-s="explain" ${asked || !task.id.includes(":q:") ? "disabled" : ""}>${asked ? "Asked ✓" : "Explain more"}</button><button class="btn strike" data-s="answer">${ai.found ? "Answer differently" : "Answer " + icon("strike")}</button></div>`;
   sheet.hidden = false;
   const close = () => { sheet.hidden = true; scrim.remove(); refocus(); };
   scrim.onclick = close;
+  const rd = sheet.querySelector("[data-s=read]");
+  if (rd) rd.onclick = () => { sheet.hidden = true; scrim.remove(); openDraft(g.id, c.line); };
   sheet.querySelector("[data-s=answer]").onclick = () => { sheet.hidden = true; scrim.remove(); openSheet(task, "right", "Answer", true, false); };
   const ex = sheet.querySelector("[data-s=explain]");
   ex.onclick = async () => {
@@ -576,8 +962,15 @@ function toggleRec(ta, btn) {
   if (rec) { stopRec(); return; }
   if (!SR) { $("#lis").textContent = "Use the mic on your keyboard"; ta.focus(); return; }
   rec = new SR(); rec.lang = "en-US"; rec.interimResults = true; rec.continuous = false;
-  const base = ta.value ? ta.value.replace(/\s*$/, " ") : "";
-  rec.onresult = (e) => { let s = ""; for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript; ta.value = base + s; };
+  const a = ta.selectionStart ?? ta.value.length, z = ta.selectionEnd ?? a;   // speech goes in at the cursor (or replaces the selection)
+  const pre = ta.value.slice(0, a), post = ta.value.slice(z), sep = pre && !/\s$/.test(pre) ? " " : "";
+  rec.onresult = (e) => {
+    let s = ""; for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
+    const tail = post && !/^[\s.,;:!?)]/.test(post) ? " " : "";
+    ta.value = pre + sep + s + tail + post;
+    const p = (pre + sep + s).length; ta.setSelectionRange(p, p);
+    ta.dispatchEvent(new Event("input"));
+  };
   rec.onerror = (e) => { $("#lis").textContent = e.error === "not-allowed" ? "Mic blocked: allow it in settings, or use the keyboard mic" : "Didn't catch that. Try again"; };
   rec.onend = () => { rec = null; btn.style.boxShadow = ""; if ($("#lis").textContent === "Listening…") $("#lis").textContent = ""; };
   $("#lis").textContent = "Listening…"; btn.style.boxShadow = "0 0 0 6px rgba(198,42,31,.35)";
@@ -599,7 +992,10 @@ function openSettings() {
   scrim.onclick = close;
   sheet.querySelector("[data-s=close]").onclick = close;
   sheet.querySelector("[data-s=later]").onclick = () => { LS.set("later", []); toast("Put-back matches are back in order."); close(); };
-  sheet.querySelector("[data-s=signout]").onclick = () => { ["token", "deck", "inbox", "queue", "sent"].forEach(LS.del); state.deck = null; sheet.hidden = true; scrim.remove(); render(); };
+  sheet.querySelector("[data-s=signout]").onclick = () => {
+    ["token", "deck", "inbox", "queue", "sent", "edits", "typing", "draftIds", ...LS.get("draftIds", []).map((x) => "draft:" + x)].forEach(LS.del);
+    state.deck = null; state.read = null; state.view = "deck"; sheet.hidden = true; scrim.remove(); render();
+  };
 }
 
 /* ---------- bits ---------- */
@@ -614,22 +1010,30 @@ function icon(n) {
     shelf: '<rect x="3" y="4" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="4" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="8" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>',
     deck: '<rect x="5" y="3" width="14" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     note: '<path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M13.5 6.5l4 4" stroke="currentColor" stroke-width="2"/>',
+    back: '<path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   }[n] || "";
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
 }
 
 /* ---------- boot ---------- */
 function applyHash() {
-  const m = /grant=([^&]+)/.exec(location.hash);
+  const m = /grant=([^&]+)/.exec(location.hash), rd = /read=([^&]+)/.exec(location.hash);
   if (m) { state.focus = decodeURIComponent(m[1]); state.view = "deck"; }
+  if (rd) state.pendingRead = decodeURIComponent(rd[1]);
 }
-window.addEventListener("hashchange", () => { applyHash(); render(); });
+window.addEventListener("hashchange", () => {
+  applyHash();
+  if (state.pendingRead && state.deck) { const id = state.pendingRead; state.pendingRead = null; openDraft(id); }
+  else render();
+});
 window.addEventListener("online", flushQueue);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && LS.get("token", "") && Date.now() - state.lastFetch > 120e3) fetchDeck();
+  if (document.visibilityState !== "visible" || !LS.get("token", "")) return;
+  if (Date.now() - state.lastFetch > 120e3) fetchDeck();
+  if (state.view === "draft" && state.read && !state.read.loading && Date.now() - (state.read.at || 0) > 120e3) loadDraft(state.read);
 });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 applyHash();
-if (state.demo) ["sent", "later"].forEach(LS.del);   // demo starts fresh each load
+if (state.demo) ["sent", "later", "edits", "typing"].forEach(LS.del);   // demo starts fresh each load
 render();
 if (LS.get("token", "") || state.demo) fetchDeck();

@@ -1,6 +1,6 @@
 /* Offline shell for Matchbox. Caches only the app's own files — never GitHub API responses
    (the grant deck is cached by the app in localStorage on this phone). */
-const CACHE = "matchbox-v1";
+const CACHE = "matchbox-v2";
 const SHELL = ["./", "index.html", "app.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
